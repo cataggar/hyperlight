@@ -901,17 +901,14 @@ impl MultiUseSandbox {
         Ok(size)
     }
 
-    /// Calls a guest function with type-erased parameters and return values.
-    ///
-    /// This function is used for fuzz testing parameter and return type handling.
+    /// Calls a guest function with a runtime-defined signature.
     ///
     /// ## Poisoned Sandbox
     ///
     /// This method will return [`crate::HyperlightError::PoisonedSandbox`] if the sandbox
     /// is currently poisoned. Use [`restore()`](Self::restore) to recover from a poisoned state.
-    #[cfg(feature = "fuzzing")]
     #[instrument(err(Debug), skip(self, args), parent = Span::current())]
-    pub fn call_type_erased_guest_function_by_name(
+    pub fn call_dynamic(
         &mut self,
         func_name: &str,
         ret_type: ReturnType,
@@ -923,6 +920,17 @@ impl MultiUseSandbox {
         maybe_time_and_emit_guest_call(func_name, || {
             self.call_guest_function_by_name_no_reset(func_name, ret_type, args)
         })
+    }
+
+    /// Calls a guest function with type-erased parameters and return values.
+    #[cfg(feature = "fuzzing")]
+    pub fn call_type_erased_guest_function_by_name(
+        &mut self,
+        func_name: &str,
+        ret_type: ReturnType,
+        args: Vec<ParameterValue>,
+    ) -> Result<ReturnValue> {
+        self.call_dynamic(func_name, ret_type, args)
     }
 
     fn call_guest_function_by_name_no_reset(

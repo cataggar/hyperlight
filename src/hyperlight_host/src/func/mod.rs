@@ -15,7 +15,7 @@
 pub(crate) mod host_functions;
 
 /// Re-export for `HostFunction` trait
-pub use host_functions::{HostFunction, Registerable};
+pub use host_functions::{DynamicHostFunction, HostFunction, Registerable};
 /// Re-export for chunk-preserving byte values
 pub use hyperlight_common::flatbuffer_wrappers::function_types::Bytes;
 /// Re-export for `ParameterType` enum

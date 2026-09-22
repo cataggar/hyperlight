@@ -7,7 +7,7 @@ use hyperlight_common::flatbuffer_wrappers::function_types::{ParameterValue, Ret
 use hyperlight_common::for_each_tuple;
 use hyperlight_common::func::{Error as FuncError, Function, ResultType};
 
-use super::{ParameterTuple, SupportedReturnType};
+use super::{ParameterTuple, ParameterType, ReturnType, SupportedReturnType};
 use crate::sandbox::UninitializedSandbox;
 use crate::sandbox::host_funcs::FunctionEntry;
 use crate::{HyperlightError, Result, new_error};
@@ -22,6 +22,48 @@ pub trait Registerable {
         hf: impl Into<HostFunction<Output, Args>>,
     ) -> Result<()>;
 }
+
+/// A host function whose parameter and return types are supplied at runtime.
+///
+/// This is useful for language bindings and other callers that cannot express
+/// a Hyperlight function signature as Rust generic parameters.
+pub struct DynamicHostFunction {
+    func: Box<dyn Fn(Vec<ParameterValue>) -> Result<ReturnValue> + Send + Sync + 'static>,
+}
+
+impl DynamicHostFunction {
+    /// Create a dynamic host function from a mutable callback.
+    pub fn new(
+        func: impl FnMut(Vec<ParameterValue>) -> Result<ReturnValue> + Send + 'static,
+    ) -> Self {
+        let func = Mutex::new(func);
+        Self {
+            func: Box::new(move |args| {
+                let mut func = func
+                    .lock()
+                    .map_err(|e| new_error!("Error locking at {}:{}: {}", file!(), line!(), e))?;
+                (func)(args)
+            }),
+        }
+    }
+
+    pub(crate) fn call(&self, args: Vec<ParameterValue>) -> Result<ReturnValue> {
+        (self.func)(args)
+    }
+}
+
+fn dynamic_entry(
+    parameter_types: Vec<ParameterType>,
+    return_type: ReturnType,
+    func: impl FnMut(Vec<ParameterValue>) -> Result<ReturnValue> + Send + 'static,
+) -> FunctionEntry {
+    FunctionEntry {
+        function: DynamicHostFunction::new(func),
+        parameter_types,
+        return_type,
+    }
+}
+
 impl Registerable for UninitializedSandbox {
     fn register_host_function<Args: ParameterTuple, Output: SupportedReturnType>(
         &mut self,
@@ -35,11 +77,33 @@ impl Registerable for UninitializedSandbox {
 
         let entry = FunctionEntry {
             function: hf.into().into(),
-            parameter_types: Args::TYPE,
+            parameter_types: Args::TYPE.to_vec(),
             return_type: Output::TYPE,
         };
 
         (*hfs).register_host_function(name.to_string(), entry);
+        Ok(())
+    }
+}
+
+impl UninitializedSandbox {
+    /// Register a host function with a runtime-defined signature.
+    pub fn register_host_function_dynamic(
+        &mut self,
+        name: &str,
+        parameter_types: Vec<ParameterType>,
+        return_type: ReturnType,
+        func: impl FnMut(Vec<ParameterValue>) -> Result<ReturnValue> + Send + 'static,
+    ) -> Result<()> {
+        let mut hfs = self
+            .host_funcs
+            .try_lock()
+            .map_err(|e| new_error!("Error locking at {}:{}: {}", file!(), line!(), e))?;
+
+        hfs.register_host_function(
+            name.to_string(),
+            dynamic_entry(parameter_types, return_type, func),
+        );
         Ok(())
     }
 }
@@ -76,7 +140,7 @@ impl Registerable for crate::MultiUseSandbox {
 
         let entry = FunctionEntry {
             function: hf.into().into(),
-            parameter_types: Args::TYPE,
+            parameter_types: Args::TYPE.to_vec(),
             return_type: Output::TYPE,
         };
 
@@ -90,6 +154,29 @@ impl Registerable for crate::MultiUseSandbox {
     }
 }
 
+impl crate::MultiUseSandbox {
+    /// Register a host function with a runtime-defined signature.
+    pub fn register_host_function_dynamic(
+        &mut self,
+        name: &str,
+        parameter_types: Vec<ParameterType>,
+        return_type: ReturnType,
+        func: impl FnMut(Vec<ParameterValue>) -> Result<ReturnValue> + Send + 'static,
+    ) -> Result<()> {
+        let mut hfs = self
+            .host_funcs
+            .try_lock()
+            .map_err(|e| new_error!("Error locking at {}:{}: {}", file!(), line!(), e))?;
+
+        hfs.register_host_function(
+            name.to_string(),
+            dynamic_entry(parameter_types, return_type, func),
+        );
+        self.snapshot = None;
+        Ok(())
+    }
+}
+
 impl Registerable for crate::HostFunctions {
     fn register_host_function<Args: ParameterTuple, Output: SupportedReturnType>(
         &mut self,
@@ -98,13 +185,29 @@ impl Registerable for crate::HostFunctions {
     ) -> Result<()> {
         let entry = FunctionEntry {
             function: hf.into().into(),
-            parameter_types: Args::TYPE,
+            parameter_types: Args::TYPE.to_vec(),
             return_type: Output::TYPE,
         };
 
         self.inner_mut()
             .register_host_function(name.to_string(), entry);
         Ok(())
+    }
+}
+
+impl crate::HostFunctions {
+    /// Register a host function with a runtime-defined signature.
+    pub fn register_host_function_dynamic(
+        &mut self,
+        name: &str,
+        parameter_types: Vec<ParameterType>,
+        return_type: ReturnType,
+        func: impl FnMut(Vec<ParameterValue>) -> Result<ReturnValue> + Send + 'static,
+    ) {
+        self.inner_mut().register_host_function(
+            name.to_string(),
+            dynamic_entry(parameter_types, return_type, func),
+        );
     }
 }
 
@@ -143,10 +246,6 @@ where
     func: Arc<dyn Function<Output, Args, HyperlightError> + Send + Sync + 'static>,
 }
 
-pub(crate) struct TypeErasedHostFunction {
-    func: Box<dyn Fn(Vec<ParameterValue>) -> Result<ReturnValue> + Send + Sync + 'static>,
-}
-
 impl<Args, Output> HostFunction<Output, Args>
 where
     Args: ParameterTuple,
@@ -155,12 +254,6 @@ where
     /// Call the host function with the given arguments.
     pub fn call(&self, args: Args) -> Result<Output> {
         self.func.call(args)
-    }
-}
-
-impl TypeErasedHostFunction {
-    pub(crate) fn call(&self, args: Vec<ParameterValue>) -> Result<ReturnValue> {
-        (self.func)(args)
     }
 }
 
@@ -186,13 +279,13 @@ impl From<FuncError> for HyperlightError {
     }
 }
 
-impl<Args, Output> From<HostFunction<Output, Args>> for TypeErasedHostFunction
+impl<Args, Output> From<HostFunction<Output, Args>> for DynamicHostFunction
 where
     Args: ParameterTuple,
     Output: SupportedReturnType,
 {
-    fn from(func: HostFunction<Output, Args>) -> TypeErasedHostFunction {
-        TypeErasedHostFunction {
+    fn from(func: HostFunction<Output, Args>) -> DynamicHostFunction {
+        DynamicHostFunction {
             func: Box::new(move |args: Vec<ParameterValue>| {
                 let args = Args::from_value(args)?;
                 Ok(func.call(args)?.into_value())
@@ -240,7 +333,7 @@ pub(crate) fn register_host_function<Args: ParameterTuple, Output: SupportedRetu
 
     let entry = FunctionEntry {
         function: func,
-        parameter_types: Args::TYPE,
+        parameter_types: Args::TYPE.to_vec(),
         return_type: Output::TYPE,
     };
 
@@ -251,4 +344,30 @@ pub(crate) fn register_host_function<Args: ParameterTuple, Output: SupportedRetu
         .register_host_function(name.to_string(), entry);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dynamic_host_function_invokes_mutable_callback() {
+        let mut calls = 0;
+        let function = DynamicHostFunction::new(move |args| {
+            calls += 1;
+            let [ParameterValue::Int(value)] = args.as_slice() else {
+                return Err(new_error!("expected one i32 argument"));
+            };
+            Ok(ReturnValue::Int(*value + calls))
+        });
+
+        assert_eq!(
+            function.call(vec![ParameterValue::Int(40)]).unwrap(),
+            ReturnValue::Int(41)
+        );
+        assert_eq!(
+            function.call(vec![ParameterValue::Int(40)]).unwrap(),
+            ReturnValue::Int(42)
+        );
+    }
 }

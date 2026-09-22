@@ -5,6 +5,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Prerelease] - Unreleased
 
 ### Added
+* Runtime-defined guest calls and host-function registration for language
+  bindings.
+* An ownership-safe C guest API for calling host functions and releasing their
+  returned values.
 * Add per-direction virtqueue configuration and account its allocations in
   scratch sizing.
 * Shared virtqueue framing with a 12-byte `MsgHeader` and external byte values.

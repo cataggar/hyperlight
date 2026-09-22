@@ -168,6 +168,15 @@ impl FfiByteChunks {
         Self { chunks, count }
     }
 
+    pub(crate) fn from_bytes(chunks: Vec<Bytes>) -> Self {
+        Self::from_owned_chunks(
+            chunks
+                .into_iter()
+                .map(|chunk| chunk.as_ref().to_vec())
+                .collect(),
+        )
+    }
+
     /// # Safety
     ///
     /// This value must have been created by [`Self::from_owned_chunks`] and

@@ -32,8 +32,8 @@ pub union FfiReturnValueUnion {
 #[repr(C)]
 #[allow(non_camel_case_types)]
 pub struct FfiReturnValue {
-    tag: ReturnType,
-    value: FfiReturnValueUnion,
+    pub tag: ReturnType,
+    pub value: FfiReturnValueUnion,
 }
 
 impl FfiReturnValue {
@@ -157,6 +157,34 @@ impl FfiReturnValue {
     }
 }
 
+impl TryFrom<ReturnValue> for FfiReturnValue {
+    type Error = ();
+
+    fn try_from(value: ReturnValue) -> Result<Self, Self::Error> {
+        Ok(match value {
+            ReturnValue::Int(value) => Self::int(value),
+            ReturnValue::UInt(value) => Self::uint(value),
+            ReturnValue::Long(value) => Self::long(value),
+            ReturnValue::ULong(value) => Self::ulong(value),
+            ReturnValue::Float(value) => Self::float(value),
+            ReturnValue::Double(value) => Self::double(value),
+            ReturnValue::Bool(value) => Self::boolean(value),
+            ReturnValue::Void(()) => Self::void(),
+            ReturnValue::String(value) => {
+                let value = CString::new(value).map_err(|_| ())?;
+                Self::string(&value)
+            }
+            ReturnValue::VecBytes(value) => Self::vec_bytes(value),
+            ReturnValue::ByteChunks(value) => Self {
+                tag: ReturnType::ByteChunks,
+                value: FfiReturnValueUnion {
+                    ByteChunks: FfiByteChunks::from_bytes(value),
+                },
+            },
+        })
+    }
+}
+
 impl Drop for FfiReturnValue {
     fn drop(&mut self) {
         // SAFETY: constructors initialize the owned field selected by the tag.
@@ -168,5 +196,44 @@ impl Drop for FfiReturnValue {
                 _ => {}
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use hyperlight_common::flatbuffer_wrappers::function_types::Bytes;
+
+    use super::*;
+
+    #[test]
+    fn return_values_round_trip_through_owned_ffi_values() {
+        let values = [
+            ReturnValue::Int(-1),
+            ReturnValue::UInt(2),
+            ReturnValue::Long(-3),
+            ReturnValue::ULong(4),
+            ReturnValue::Float(5.5),
+            ReturnValue::Double(6.5),
+            ReturnValue::Bool(true),
+            ReturnValue::Void(()),
+            ReturnValue::String("hello".to_string()),
+            ReturnValue::VecBytes(vec![1, 2, 3]),
+            ReturnValue::ByteChunks(vec![
+                Bytes::copy_from_slice(b"hello"),
+                Bytes::copy_from_slice(b"world"),
+            ]),
+        ];
+
+        for expected in values {
+            let ffi = FfiReturnValue::try_from(expected.clone()).unwrap();
+            // SAFETY: `ffi` was created by `FfiReturnValue`.
+            let actual = unsafe { ffi.into_return_value() };
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn string_with_nul_is_rejected() {
+        assert!(FfiReturnValue::try_from(ReturnValue::String("a\0b".to_string())).is_err());
     }
 }

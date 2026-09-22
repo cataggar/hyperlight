@@ -158,3 +158,18 @@ pub unsafe extern "C" fn hl_free_byte_chunks(value: *mut FfiByteChunks) {
     // SAFETY: required by the caller.
     unsafe { OwnedFfiByteChunks::free(value) };
 }
+
+/// Release an owned return value.
+///
+/// # Safety
+///
+/// `value` must be null or a pointer returned by
+/// [`crate::dispatch::hl_call_host_function_with_result`] that has not already
+/// been freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hl_free_return_value(value: *mut FfiReturnValue) {
+    if !value.is_null() {
+        // SAFETY: required by the caller.
+        drop(unsafe { Box::from_raw(value) });
+    }
+}
