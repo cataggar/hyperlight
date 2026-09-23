@@ -154,7 +154,9 @@ pub extern "C" fn hl_call_host_function_with_result(
     get_host_return_value_raw()
         .ok()
         .and_then(|value| FfiReturnValue::try_from(value).ok())
-        .map_or(core::ptr::null_mut(), Box::into_raw)
+        .map_or(core::ptr::null_mut(), |value| {
+            Box::into_raw(Box::new(value))
+        })
 }
 
 /// Retrieve the return value from the last `hl_call_host_function`.
