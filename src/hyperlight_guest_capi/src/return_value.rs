@@ -62,6 +62,35 @@ pub unsafe extern "C" fn hl_result_from_String(value: *const c_char) -> Box<FfiR
 }
 
 #[unsafe(no_mangle)]
+/// Create a string result from a length-delimited UTF-8 buffer.
+///
+/// Returns null when the buffer is not valid UTF-8 or contains an interior NUL.
+///
+/// # Safety
+///
+/// `data` must reference `len` readable bytes when `len` is nonzero.
+pub unsafe extern "C" fn hl_result_from_StringBytes(
+    data: *const u8,
+    len: usize,
+) -> *mut FfiReturnValue {
+    let bytes = if len == 0 {
+        &[]
+    } else if data.is_null() {
+        return core::ptr::null_mut();
+    } else {
+        // SAFETY: callers provide `len` readable bytes.
+        unsafe { core::slice::from_raw_parts(data, len) }
+    };
+    let Ok(value) = core::str::from_utf8(bytes) else {
+        return core::ptr::null_mut();
+    };
+    let Ok(value) = CString::new(value) else {
+        return core::ptr::null_mut();
+    };
+    Box::into_raw(Box::new(FfiReturnValue::string(&value)))
+}
+
+#[unsafe(no_mangle)]
 /// # Safety
 ///
 /// `data` must reference `len` readable bytes when `len` is nonzero.
@@ -171,5 +200,37 @@ pub unsafe extern "C" fn hl_free_return_value(value: *mut FfiReturnValue) {
     if !value.is_null() {
         // SAFETY: required by the caller.
         drop(unsafe { Box::from_raw(value) });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use hyperlight_common::flatbuffer_wrappers::function_types::ReturnValue;
+
+    use super::*;
+
+    #[test]
+    fn string_bytes_result_validates_and_owns_input() {
+        let input = String::from("hello");
+        let result = unsafe { hl_result_from_StringBytes(input.as_ptr(), input.len()) };
+        drop(input);
+
+        assert!(!result.is_null());
+        let result = unsafe { Box::from_raw(result) };
+        assert_eq!(
+            unsafe { (*result).into_return_value() },
+            ReturnValue::String(String::from("hello"))
+        );
+
+        let invalid_utf8 = [0xff];
+        assert!(
+            unsafe { hl_result_from_StringBytes(invalid_utf8.as_ptr(), invalid_utf8.len()) }
+                .is_null()
+        );
+        let interior_nul = b"a\0b";
+        assert!(
+            unsafe { hl_result_from_StringBytes(interior_nul.as_ptr(), interior_nul.len()) }
+                .is_null()
+        );
     }
 }
