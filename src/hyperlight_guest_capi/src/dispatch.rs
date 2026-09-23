@@ -16,7 +16,7 @@ use hyperlight_guest::error::{HyperlightGuestError, Result};
 use hyperlight_guest_bin::guest_function::definition::GuestFunctionDefinition;
 use hyperlight_guest_bin::guest_function::register::GuestFunctionRegister;
 use hyperlight_guest_bin::host_comm::{
-    call_host_function_without_returning_result, get_host_return_value,
+    call_host_function_without_returning_result, get_host_return_value, get_host_return_value_raw,
 };
 
 use crate::types::{FfiFunctionCall, FfiReturnValue, OwnedFfiFunctionCall};
@@ -130,6 +130,31 @@ pub extern "C" fn hl_call_host_function(function_call: &FfiFunctionCall) {
 
     call_host_function_without_returning_result(&func_name, Some(parameters), return_type)
         .expect("Failed to call host function");
+}
+
+/// Call a host function and return an owned result.
+///
+/// Returns null if the host call fails or if its result cannot be represented
+/// by the C API. A successful result must be released with
+/// [`hl_free_return_value`](crate::return_value::hl_free_return_value).
+#[unsafe(no_mangle)]
+pub extern "C" fn hl_call_host_function_with_result(
+    function_call: &FfiFunctionCall,
+) -> *mut FfiReturnValue {
+    let parameters = unsafe { function_call.copy_parameters() };
+    let func_name = unsafe { function_call.copy_function_name() };
+    let return_type = unsafe { function_call.copy_return_type() };
+
+    if call_host_function_without_returning_result(&func_name, Some(parameters), return_type)
+        .is_err()
+    {
+        return core::ptr::null_mut();
+    }
+
+    get_host_return_value_raw()
+        .ok()
+        .and_then(|value| FfiReturnValue::try_from(value).ok())
+        .map_or(core::ptr::null_mut(), Box::into_raw)
 }
 
 /// Retrieve the return value from the last `hl_call_host_function`.

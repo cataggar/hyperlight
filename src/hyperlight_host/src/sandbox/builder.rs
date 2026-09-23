@@ -6,10 +6,13 @@ use std::sync::{Arc, Mutex};
 #[cfg(target_os = "linux")]
 use std::time::Duration;
 
+use hyperlight_common::flatbuffer_wrappers::function_types::{
+    ParameterType, ParameterValue, ReturnType, ReturnValue,
+};
 use hyperlight_common::func::{ParameterTuple, SupportedReturnType};
 use tracing_core::LevelFilter;
 
-use crate::func::HostFunction;
+use crate::func::{DynamicHostFunction, HostFunction};
 use crate::mem::memory_region::{MemoryRegion, MemoryRegionFlags};
 use crate::sandbox::SandboxConfiguration;
 #[cfg(gdb)]
@@ -268,13 +271,37 @@ impl SandboxBuilder {
 
         let entry = FunctionEntry {
             function: func,
-            parameter_types: Args::TYPE,
+            parameter_types: Args::TYPE.to_vec(),
             return_type: Output::TYPE,
         };
 
         self.host_funcs
             .inner_mut()
             .register_host_function(name, entry);
+        self
+    }
+
+    /// Registers a host function with a runtime-defined signature.
+    ///
+    /// This is the dynamic counterpart to [`Self::host_function`] for
+    /// language bindings and other callers that cannot express a signature
+    /// through Rust generic parameters.
+    pub fn host_function_dynamic(
+        mut self,
+        name: impl AsRef<str>,
+        parameter_types: Vec<ParameterType>,
+        return_type: ReturnType,
+        func: impl FnMut(Vec<ParameterValue>) -> Result<ReturnValue> + Send + 'static,
+    ) -> Self {
+        let entry = FunctionEntry {
+            function: DynamicHostFunction::new(func),
+            parameter_types,
+            return_type,
+        };
+
+        self.host_funcs
+            .inner_mut()
+            .register_host_function(name.as_ref().to_string(), entry);
         self
     }
 
@@ -429,6 +456,9 @@ impl SandboxBuilder {
 
 #[cfg(test)]
 mod tests {
+    use hyperlight_common::flatbuffer_wrappers::function_types::{
+        ParameterType, ParameterValue, ReturnType, ReturnValue,
+    };
     use hyperlight_testing::simple_guest_as_string;
     use tracing_core::LevelFilter;
 
@@ -445,6 +475,34 @@ mod tests {
 
         let result = sandbox.call::<String>("Echo", "hello".to_string()).unwrap();
         assert_eq!(result, "hello");
+    }
+
+    #[test]
+    fn build_with_dynamic_host_function_and_call_guest_dynamically() {
+        let path = simple_guest_as_string().unwrap();
+        let mut sandbox = SandboxBuilder::from_file(path)
+            .host_function_dynamic(
+                "HostEchoI32",
+                vec![ParameterType::Int],
+                ReturnType::Int,
+                |args| {
+                    let [ParameterValue::Int(value)] = args.as_slice() else {
+                        panic!("expected one i32 argument");
+                    };
+                    Ok(ReturnValue::Int(*value))
+                },
+            )
+            .build()
+            .unwrap();
+
+        let result = sandbox
+            .call_dynamic(
+                "RoundTripHostI32",
+                ReturnType::Int,
+                vec![ParameterValue::Int(42)],
+            )
+            .unwrap();
+        assert_eq!(result, ReturnValue::Int(42));
     }
 
     #[test]

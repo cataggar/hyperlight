@@ -14,7 +14,7 @@ use tracing::{Span, instrument};
 
 use crate::HyperlightError::HostFunctionNotFound;
 use crate::Result;
-use crate::func::host_functions::TypeErasedHostFunction;
+use crate::func::DynamicHostFunction;
 
 #[derive(Default)]
 /// A Wrapper around details of functions exposed by the Host
@@ -116,8 +116,8 @@ impl From<&FunctionRegistry> for HostFunctionDetails {
 }
 
 pub struct FunctionEntry {
-    pub function: TypeErasedHostFunction,
-    pub parameter_types: &'static [ParameterType],
+    pub function: DynamicHostFunction,
+    pub parameter_types: Vec<ParameterType>,
     pub return_type: ReturnType,
 }
 
@@ -129,13 +129,10 @@ impl FunctionRegistry {
     }
 
     /// Return the registered signature for `name`.
-    pub(crate) fn function_signature(
-        &self,
-        name: &str,
-    ) -> Option<(&'static [ParameterType], ReturnType)> {
+    pub(crate) fn function_signature(&self, name: &str) -> Option<(&[ParameterType], ReturnType)> {
         self.functions_map
             .get(name)
-            .map(|entry| (entry.parameter_types, entry.return_type))
+            .map(|entry| (entry.parameter_types.as_slice(), entry.return_type))
     }
 
     /// Create a `FunctionRegistry` pre-populated with the default
@@ -148,7 +145,7 @@ impl FunctionRegistry {
         let hf: HostFunction<i32, (String,)> = default_writer_func.into();
         let entry = FunctionEntry {
             function: hf.into(),
-            parameter_types: <(String,)>::TYPE,
+            parameter_types: <(String,)>::TYPE.to_vec(),
             return_type: <i32 as SupportedReturnType>::TYPE,
         };
         registry.register_host_function("HostPrint".to_string(), entry);
